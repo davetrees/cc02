@@ -11,3 +11,6 @@ logs/
 certs/
 config.json
 *.bin
+
+._*
+.DS_Store
