@@ -248,6 +248,10 @@ small{color:#888}
   <label><input type="checkbox" id="colStop" checked> Collision-stop enable —
    area thr <input type="range" id="colThr" min="5" max="60" value="20">
    <span id="colThrV">0.20</span></label>
+  <label>Path ROI (collision window) —
+   width <input type="range" id="roiW" min="5" max="100" value="34"><span id="roiWV">0.34</span>
+   top <input type="range" id="roiT" min="0" max="80" value="35"><span id="roiTV">0.35</span>
+   bottom <input type="range" id="roiB" min="0" max="60" value="5"><span id="roiBV">0.05</span></label>
  </div>
 
  <div class="card">
@@ -283,6 +287,10 @@ function initCfg(c){
     document.getElementById('colThrV').textContent=c.collision_area_threshold.toFixed(2);}
   if(c.yolo_classes)Array.prototype.forEach.call(document.getElementById('classes').options,
     function(o){o.selected=c.yolo_classes.indexOf(o.value)>=0;});
+  [['roiW','roiWV','path_center_frac'],['roiT','roiTV','path_top_frac'],
+   ['roiB','roiBV','path_bottom_frac']].forEach(function(a){
+    if(c[a[2]]!=null){set(a[0],Math.round(c[a[2]]*100));
+      document.getElementById(a[1]).textContent=(+c[a[2]]).toFixed(2);}});
 }
 connect();
 function send(o){if(ws&&ws.readyState==1)ws.send(JSON.stringify(o));}
@@ -393,16 +401,22 @@ function cfg(){
     yolo_conf:document.getElementById('yoloConf').value/100,
     yolo_classes:cls,
     collision_stop:document.getElementById('colStop').checked,
-    collision_area_threshold:document.getElementById('colThr').value/100}});
+    collision_area_threshold:document.getElementById('colThr').value/100,
+    path_center_frac:+document.getElementById('roiW').value/100,
+    path_top_frac:+document.getElementById('roiT').value/100,
+    path_bottom_frac:+document.getElementById('roiB').value/100}});
   document.getElementById('yoloConfV').textContent=(document.getElementById('yoloConf').value/100).toFixed(2);
   document.getElementById('colThrV').textContent=(document.getElementById('colThr').value/100).toFixed(2);
+  document.getElementById('roiWV').textContent=(document.getElementById('roiW').value/100).toFixed(2);
+  document.getElementById('roiTV').textContent=(document.getElementById('roiT').value/100).toFixed(2);
+  document.getElementById('roiBV').textContent=(document.getElementById('roiB').value/100).toFixed(2);
 }
 // numeric fields: 'change' only (typing partial values must not send
 // transient configs, e.g. "0." -> block_thr 0); sliders stay live on 'input'
 ['maxSpeedUs','cruiseUs','blockThr','hyst','antiTip','tipRoll','tipPitch','yoloEn',
  'classes','colStop']
  .forEach(function(id){document.getElementById(id).addEventListener('change',cfg);});
-['yoloConf','colThr']
+['yoloConf','colThr','roiW','roiT','roiB']
  .forEach(function(id){document.getElementById(id).addEventListener('change',cfg);
    document.getElementById(id).addEventListener('input',cfg);});
 // ---- map ----
