@@ -352,7 +352,16 @@ class Autopilot(threading.Thread):
         else:
             scale = (clearance - block_thr) / max(1e-6, open_thr - block_thr)
         cruise = float(cfg.get('auto_cruise_us', 120))
-        throttle_us = 1500 + int(min(cruise * scale, cap_us))
+        # ESC DEADBAND FLOOR (learned from field driving 2026-08-16): a forward
+        # command below ~110us produces NO motion, which then trips the
+        # stuck-detector into an endless false escape loop. Any non-zero cruise
+        # commands at least auto_min_move_us; below that scale, stop outright.
+        min_move = float(cfg.get('auto_min_move_us', 110))
+        if scale <= 0.0:
+            throttle_us = 1500
+        else:
+            dev = min(cap_us, max(min_move, cruise * scale))
+            throttle_us = 1500 + int(dev)
 
         blocked = scale == 0.0 or st.collision
         person = self._person_obstruction()
