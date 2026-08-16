@@ -1,0 +1,10 @@
+[Unit]
+Description=CC-02 WiFi AP fallback (hotspot if no wifi and no eth carrier)
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/pi/cc02/scripts/ap_fallback.sh
+
+[Install]
+WantedBy=multi-user.target

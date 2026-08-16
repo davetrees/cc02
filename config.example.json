@@ -1,0 +1,21 @@
+{
+ "yolo_enable": true,
+ "yolo_conf": 0.35,
+ "yolo_classes": [
+  "person",
+  "car",
+  "chair",
+  "dog",
+  "cat",
+  "bottle",
+  "backpack"
+ ],
+ "collision_stop": true,
+ "collision_area_threshold": 0.2,
+ "max_speed": 0.53,
+ "anti_tip_enable": false,
+ "tip_roll_deg": 45,
+ "tip_pitch_deg": 45,
+ "invert_steer": false,
+ "invert_throttle": true
+}

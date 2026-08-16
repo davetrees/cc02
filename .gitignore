@@ -1,0 +1,13 @@
+# build artifacts
+firmware/build/
+firmware/managed_components/
+firmware/sdkconfig.old
+**/__pycache__/
+*.pyc
+# runtime state / logs / secrets
+brain/logs/
+logs/
+*.log
+certs/
+config.json
+*.bin
