@@ -36,6 +36,35 @@ DEFAULT_CONFIG = {
     'stuck_time_s': 2.0,        # forward commanded this long with no vibration
     'stuck_accel_var': 0.02,    # sum of xyz accel variances below this = stuck
     'override_thr': 0.3,        # |user input| above this in AUTO/RTH -> MANUAL
+    'auto_min_move_us': 110,    # ESC deadband floor; below this is no motion
+    # body-frame occupancy + DWA (this camera frame only; not a world map)
+    'cam_height_m': 0.16,
+    'cam_tilt_deg': 22.0,
+    'cam_fx': 520.0,
+    'cam_fy': 520.0,
+    'cam_x_m': 0.08,
+    'cam_y_m': 0.0,
+    'wheelbase_m': 0.242,
+    'steer_max_deg': 28.0,
+    'speed_mps_per_us': 0.0035,
+    'grid_cols': 24,
+    'grid_rows': 40,
+    'grid_res_m': 0.12,
+    'grid_behind_m': 0.48,
+    'occ_inflate_m': 0.18,
+    'auto_clear_open_m': 1.35,
+    'auto_clear_stop_m': 0.42,
+    'dwa_horizon_s': 1.6,
+    'dwa_dt': 0.10,
+    'dwa_n_v': 6,
+    'dwa_n_delta': 9,
+    'dwa_w_progress': 1.35,
+    'dwa_w_speed': 1.10,
+    'dwa_w_clear': 1.80,
+    'dwa_w_curve': 0.55,
+    'dwa_w_smooth': 0.70,
+    'dwa_w_gap': 0.45,
+    'dwa_w_commit': 0.22,
     # web-panel-only input inversion (see web.py ws handler)
     'web_invert_steer': True,
     'web_invert_throttle': True,
@@ -74,15 +103,22 @@ class State:
         self.range_proxy = -1
         self.lap_var = 0.0
         self.col_open = [0.0] * 9  # 9 columns, 0..1 openness
+        self.floor_mask = None     # 240x320 floor prior; not a world map
         self.frame_w = 640
         self.frame_h = 480
         self.vision_time = 0.0     # monotonic time of last heuristic update
+        self.occ_grid = None       # body-frame Grid for this camera frame
+        self.occ_pub = {}          # quantized grid for the web BEV
+        self.occ_traj = []         # DWA rollout (x,y) metres, body frame
+        self.tracks_live = []      # SortTracker Track objects, this frame
+        self.tracks_pub = []       # dicts for the web BEV
         # AUTO cruiser observability (published by autopilot every tick)
         self.auto_costs = [1.0] * 9
         self.auto_target = 4
         self.auto_steer_us = 1500
         self.auto_state = 'CRUISE'
         self.auto_accel_var = None
+        self.auto_clearance = None
         # pose (dead reckoning, best-effort)
         self.pose_x = 0.0
         self.pose_y = 0.0

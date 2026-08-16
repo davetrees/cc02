@@ -1,43 +1,38 @@
 """20Hz decision loop -> (steer_us, throttle_us). Also dead-reckoned pose + breadcrumbs.
 
 MANUAL: user passthrough. ASSIST: passthrough but forward throttle cut to 1500 on
-collision (reverse allowed). AUTO: 9-column cost-map cruiser (below). RTH:
+collision (reverse allowed). AUTO: body-frame DWA cruiser (below). RTH:
 breadcrumb replay in reverse (BEST-EFFORT dead reckoning). ESTOP: 1500/1500.
 
-AUTO cruiser (rewritten 2026-08-16):
-- Cost map: 9 columns fusing (a) the Canny floor-edge openness from vision
-  (st.col_open, 0..1 per column, 1 = open) and (b) ALL YOLO detections
-  (st.boxes_all - the yolo_classes collision filter is deliberately ignored
-  here) projected onto the columns their x-span overlaps, weighted by box
-  area fraction; person boxes get auto_person_margin (2x) width safety margin.
-- Steering: P toward the lowest-cost column, with hysteresis - the target
-  column only changes when the challenger beats the current target's cost by
-  auto_hyst, so the car does not flip-flop between near-equal gaps.
-- Speed: scales with center clearance (1 - worst cost of the middle 3
-  columns): >= auto_open_thr -> full cruise (auto_cruise_us, capped by
-  max_speed); linear taper in between; <= auto_block_thr -> stop.
-- Escape: blocked (or st.collision) continuously > auto_block_time_s -> stop
-  auto_stop_time_s, reverse auto_reverse_time_s steering away from the
-  costlier side, resume cruise. If a person box is the obstruction: HOLD at
-  neutral until the person clears - NEVER reverse-escape at a person.
-- Stuck: forward commanded > stuck_time_s while IMU accel variance over a 2s
-  window is ~0 (chassis not vibrating = not actually moving) -> same escape.
-- Safety: if vision data is older than 0.5s AUTO holds neutral (no blind
-  driving, no blind escapes). Reverse deviation is also capped by max_speed.
+AUTO cruiser (DWA + occupancy, 2026-08-16):
+- Each vision frame builds an egocentric occupancy grid (floor runway +
+  tracked YOLO boxes via ground homography). Pose is NOT an obstacle source.
+  The grid is discarded next frame — no world map, no map.jsonl planning.
+- DWA samples (v, steer) in that body frame, rolls out ~1.6 s, rejects
+  collisions, scores progress/clearance/smoothness, and keeps the committed
+  path until a challenger beats it by hysteresis (open floor = cruise).
+- Speed scales with center-corridor range (auto_clear_open_m / stop_m),
+  floored at auto_min_move_us so the ESC deadband does not fake-stuck us.
+- Existing vision collision (YOLO area + wall-like runway) still stops
+  forward motion and can trigger escape.
+- Escape: blocked/collision continuously > auto_block_time_s -> stop
+  auto_stop_time_s, reverse auto_reverse_time_s steering toward the open
+  bearing. Person in the way: HOLD at neutral, never reverse-escape.
+- Stuck: forward commanded > stuck_time_s while IMU accel variance ~0.
+- Safety: vision older than 0.5s -> hold neutral.
 
-The cost map + would-be target/steer are computed every tick in every mode and
-published (st.auto_costs / auto_target / auto_steer_us / auto_state /
-auto_accel_var) so the bench can watch the cruiser's choices without AUTO
-engaged.
+The plan + 9-bin costs are computed every tick in every mode and published
+(st.auto_costs / auto_target / auto_steer_us / auto_state / occ_traj) so
+the bench can watch without AUTO engaged.
 """
 import math
 import threading
 import time
 from collections import deque
 
+import planner
 import protocol as P
 
-STEER_P_US = 300.0      # AUTO: full-scale steering deviation
 RTH_KP_US = 350.0       # rad -> us
 RTH_THROTTLE = 1550
 N_COLS = 9
@@ -67,7 +62,6 @@ class Autopilot(threading.Thread):
         self._gz_bias = 0.0
         self._bias_logged = False
         # AUTO cruiser state
-        self._target = MID
         self._auto_state = 'CRUISE'
         self._state_t = 0.0             # entry time of ESCAPE_* states
         self._blocked_since = None
@@ -76,6 +70,9 @@ class Autopilot(threading.Thread):
         self._escape_dir = 1            # +1 steer right, -1 steer left
         self._accel_buf = deque(maxlen=40)  # 2s @ 20Hz for stuck detection
         self._last_stale_log = 0.0
+        self._plan = None
+        self._last_v = 0.0
+        self._last_delta = 0.0
 
     def run(self):
         st = self.state
@@ -130,15 +127,17 @@ class Autopilot(threading.Thread):
             self._accel_buf.clear()
         st.auto_accel_var = self._accel_var()
 
-        # cost map + would-be steering target: computed every tick in every
-        # mode (bench observability); only AUTO acts on it
-        self._update_cost_map(now)
+        # DWA + occupancy: computed every tick in every mode (bench
+        # observability); only AUTO acts on it
+        self._update_cost_map(now, cap_us)
 
         # FSM only lives while AUTO is engaged
         if mode != P.MODE_AUTO:
             self._auto_state = 'CRUISE'
             self._blocked_since = None
             self._fwd_since = None
+            self._last_v = 0.0
+            self._last_delta = 0.0
             st.auto_state = self._auto_state
 
         collision_stop = bool(st.config.get('collision_stop', True))
@@ -231,48 +230,40 @@ class Autopilot(threading.Thread):
         st.rth_remaining = len(self._rth_wps) if mode == P.MODE_RTH else 0
 
     # ---------------- AUTO cruiser ----------------
-    def _update_cost_map(self, now):
-        """9-column cost map (0=open .. 2=very blocked) + hysteresis target."""
+    def _update_cost_map(self, now, cap_us):
+        """Body-frame DWA on the live occupancy grid + 9-bin panel costs."""
         st = self.state
         cfg = st.config
-        if now - st.vision_time > VISION_STALE_S:
-            st.auto_costs = [1.0] * N_COLS  # vision stale: treat all blocked
-        else:
-            opens = list(st.col_open)
-            if len(opens) != N_COLS:
-                opens = [0.0] * N_COLS
-            floor_w = float(cfg.get('auto_floor_weight', 1.0))
-            gain = float(cfg.get('auto_yolo_gain', 3.0))
-            margin = float(cfg.get('auto_person_margin', 2.0))
-            w = float(max(1, st.frame_w))
-            h = float(max(1, st.frame_h))
-            area = w * h
-            colw = w / N_COLS
-            costs = [floor_w * (1.0 - o) for o in opens]
-            for (x1, y1, x2, y2, cls, conf) in list(st.boxes_all):
-                bw, bh = x2 - x1, y2 - y1
-                if bw <= 0 or bh <= 0:
-                    continue
-                frac = (bw * bh) / area
-                cx = (x1 + x2) / 2.0
-                half = bw / 2.0 * (margin if cls == 'person' else 1.0)
-                for j in range(N_COLS):
-                    ov = min(cx + half, (j + 1) * colw) - max(cx - half, j * colw)
-                    if ov > 0:
-                        costs[j] += gain * frac * (ov / colw)
-            st.auto_costs = [round(min(2.0, c), 3) for c in costs]
+        grid = getattr(st, 'occ_grid', None)
+        if now - st.vision_time > VISION_STALE_S or grid is None:
+            st.auto_costs = [1.0] * N_COLS
+            st.occ_traj = []
+            st.auto_clearance = None
+            self._plan = None
+            st.auto_steer_us = 1500
+            st.auto_target = MID
+            return
 
-        costs = st.auto_costs
-        best = min(range(N_COLS), key=costs.__getitem__)
-        if costs[self._target] - costs[best] > float(cfg.get('auto_hyst', 0.15)):
-            self._target = best
-        st.auto_target = self._target
-        st.auto_steer_us = 1500 + int(STEER_P_US * (self._target - MID) / MID)
+        st.auto_costs = grid.column_costs(N_COLS)
+        plan = planner.plan(
+            grid, cfg, last_v=self._last_v, last_delta=self._last_delta,
+            cap_us=cap_us)
+        self._plan = plan
+        st.occ_traj = plan.get('traj') or []
+        st.auto_clearance = plan.get('corridor')
+        st.auto_steer_us = int(plan['steer_us'])
+        dmax = math.radians(float(cfg.get('steer_max_deg', 28.0)))
+        frac = float(plan['delta']) / max(1e-3, dmax)
+        st.auto_target = max(0, min(N_COLS - 1, int(round(MID + frac * MID))))
 
     def _person_obstruction(self):
-        """A person box (any size >= auto_person_area, with safety margin)
-        overlapping the center third of the frame."""
+        """Person in the forward body-frame corridor, or a large center box."""
         st = self.state
+        for tr in list(getattr(st, 'tracks_live', None) or []):
+            if tr.cls != 'person':
+                continue
+            if tr.gx is not None and tr.gx < 1.4 and abs(tr.gy) < 0.55:
+                return True
         w = float(max(1, st.frame_w))
         h = float(max(1, st.frame_h))
         area = w * h
@@ -308,15 +299,22 @@ class Autopilot(threading.Thread):
         self._blocked_since = None
         self._fwd_since = None
         self._state_t = now
+        self._last_v = 0.0
+        self._last_delta = 0.0
         if person:
             st.log(f'auto: {why}, obstruction is a PERSON -> HOLD until clear '
                    '(never reverse at a person)')
             self._auto_state = 'HOLD_PERSON'
             self._person_clear_since = None
             return
-        costs = st.auto_costs
-        left, right = sum(costs[:MID]), sum(costs[MID + 1:])
-        self._escape_dir = 1 if left > right else -1  # steer away from costlier side
+        grid = getattr(st, 'occ_grid', None)
+        if grid is not None:
+            gy, _ = grid.open_bearing_y()
+            self._escape_dir = -1 if gy > 0 else 1
+        else:
+            costs = st.auto_costs
+            left, right = sum(costs[:MID]), sum(costs[MID + 1:])
+            self._escape_dir = 1 if left > right else -1
         st.log(f'auto: {why} -> escape (stop '
                f'{float(st.config.get("auto_stop_time_s", 0.3)):.1f}s, reverse '
                f'{float(st.config.get("auto_reverse_time_s", 0.8)):.1f}s steering '
@@ -335,49 +333,39 @@ class Autopilot(threading.Thread):
             self._auto_state = 'CRUISE'
             self._blocked_since = None
             self._fwd_since = None
+            self._last_v = 0.0
+            self._last_delta = 0.0
             st.auto_state = self._auto_state
             return 1500, 1500
 
-        costs = st.auto_costs
-        steer_us = st.auto_steer_us
+        plan = self._plan
+        if plan is None:
+            st.auto_state = self._auto_state
+            return 1500, 1500
 
-        # speed from center clearance (worst of the middle 3 columns)
-        clearance = max(0.0, 1.0 - max(costs[MID - 1:MID + 2]))
-        open_thr = float(cfg.get('auto_open_thr', 0.65))
-        block_thr = float(cfg.get('auto_block_thr', 0.25))
-        if clearance >= open_thr:
-            scale = 1.0
-        elif clearance <= block_thr:
-            scale = 0.0
-        else:
-            scale = (clearance - block_thr) / max(1e-6, open_thr - block_thr)
-        cruise = float(cfg.get('auto_cruise_us', 120))
-        # ESC DEADBAND FLOOR (learned from field driving 2026-08-16): a forward
-        # command below ~110us produces NO motion, which then trips the
-        # stuck-detector into an endless false escape loop. Any non-zero cruise
-        # commands at least auto_min_move_us; below that scale, stop outright.
-        min_move = float(cfg.get('auto_min_move_us', 110))
-        if scale <= 0.0:
-            throttle_us = 1500
-        else:
-            dev = min(cap_us, max(min_move, cruise * scale))
-            throttle_us = 1500 + int(dev)
-
-        blocked = scale == 0.0 or st.collision
+        steer_us = int(plan['steer_us'])
+        throttle_us = int(plan['throttle_us'])
+        scale = float(plan.get('scale', 0.0))
+        corridor = float(plan.get('corridor', 0.0))
+        blocked = (scale <= 0.0 or plan['v'] <= 0.02
+                   or st.collision or plan.get('hit'))
         person = self._person_obstruction()
 
         if self._auto_state == 'CRUISE':
             if blocked:
                 throttle_us = 1500
+                self._last_v = 0.0
                 if self._blocked_since is None:
                     self._blocked_since = now
                 if now - self._blocked_since > float(cfg.get('auto_block_time_s', 0.7)):
                     self._begin_escape(
                         now, person,
                         f'blocked {now - self._blocked_since:.1f}s '
-                        f'(clearance {clearance:.2f}, collision {st.collision})')
+                        f'(clearance {corridor:.2f}m, collision {st.collision})')
             else:
                 self._blocked_since = None
+                self._last_v = float(plan['v'])
+                self._last_delta = float(plan['delta'])
                 # stuck: forward commanded but chassis not vibrating
                 if throttle_us > 1505:
                     if self._fwd_since is None:
@@ -395,6 +383,7 @@ class Autopilot(threading.Thread):
 
         if self._auto_state == 'HOLD_PERSON':
             steer_us, throttle_us = 1500, 1500
+            self._last_v = 0.0
             if person:
                 self._person_clear_since = None
             else:
@@ -422,6 +411,8 @@ class Autopilot(threading.Thread):
                 self._auto_state = 'CRUISE'
                 self._blocked_since = None
                 self._fwd_since = None
+                self._last_v = 0.0
+                self._last_delta = 0.0
                 self._accel_buf.clear()
 
         st.auto_state = self._auto_state
