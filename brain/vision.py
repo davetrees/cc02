@@ -343,7 +343,9 @@ class Vision(threading.Thread):
                     r += 1
             runway.append(round(max(0, r - gap) / (h * 0.55), 3))
         st.col_open = runway
-        cmin = min(runway[3:6])
+        _cf = float(st.config.get("path_center_frac", 0.34))
+        _cols = [i for i in range(9) if (i+1)/9.0 > 0.5-_cf/2 and i/9.0 < 0.5+_cf/2] or [4]
+        cmin = min(runway[i] for i in _cols)
         st.wall_like = bool(cmin < float(st.config.get("runway_block", 0.18)))
         st.range_proxy = cmin
         st.lap_var = 0.0
@@ -356,11 +358,18 @@ class Vision(threading.Thread):
         h, w = frame.shape[:2]
         area = float(w * h)
         thr = float(st.config.get('collision_area_threshold', 0.20))
+        # car-path region of interest (fractions of frame): only obstacles that
+        # overlap this rectangle count. Tune live to match the car's real path.
+        cf = float(st.config.get('path_center_frac', 0.34))   # width
+        tf = float(st.config.get('path_top_frac', 0.35))      # ignore above (distant/sky)
+        bf = float(st.config.get('path_bottom_frac', 0.05))   # ignore very bottom
+        rx0 = w * (0.5 - cf / 2.0); rx1 = w * (0.5 + cf / 2.0)
+        ry0 = h * tf;               ry1 = h * (1.0 - bf)
         yolo_close = False
         for (x1, y1, x2, y2, cls, c) in boxes:
             frac = ((x2 - x1) * (y2 - y1)) / area
-            cx = (x1 + x2) / 2.0
-            if frac > thr and (w * 0.25) < cx < (w * 0.75):
+            # box must OVERLAP the ROI rectangle in BOTH axes
+            if frac > thr and x1 < rx1 and x2 > rx0 and y1 < ry1 and y2 > ry0:
                 yolo_close = True
                 break
         st.collision = bool(yolo_close or st.wall_like)
@@ -372,6 +381,15 @@ class Vision(threading.Thread):
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, f'{cls} {c:.2f}', (x1, max(12, y1 - 5)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        fw = frame.shape[1]; fh = frame.shape[0]
+        _cf = float(st.config.get('path_center_frac', 0.34))
+        _tf = float(st.config.get('path_top_frac', 0.35))
+        _bf = float(st.config.get('path_bottom_frac', 0.05))
+        _x0 = int(fw * (0.5 - _cf / 2)); _x1 = int(fw * (0.5 + _cf / 2))
+        _y0 = int(fh * _tf); _y1 = int(fh * (1.0 - _bf))
+        cv2.rectangle(frame, (_x0, _y0), (_x1, _y1), (0, 200, 255), 2)
+        cv2.putText(frame, 'path', (_x0 + 3, _y1 - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1)
         if st.collision:
             cv2.rectangle(frame, (0, 0), (frame.shape[1], 32), (0, 0, 255), -1)
             cv2.putText(frame, 'COLLISION', (10, 24),
