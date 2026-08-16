@@ -145,8 +145,13 @@ async def _telem_sender(ws, st, mapping):
                          'target': st.auto_target,
                          'steer_us': st.auto_steer_us,
                          'costs': st.auto_costs,
+                         'clearance': (round(st.auto_clearance, 2)
+                                       if st.auto_clearance is not None else None),
                          'accel_var': (round(st.auto_accel_var, 5)
                                        if st.auto_accel_var is not None else None)},
+                'occ': dict(getattr(st, 'occ_pub', None) or {},
+                            traj=getattr(st, 'occ_traj', None) or [],
+                            tracks=getattr(st, 'tracks_pub', None) or []),
                 'config': st.config,
             }
             await ws.send_str(json.dumps(out))
@@ -182,6 +187,7 @@ button.active{background:#0a84ff}
 .joyrow{display:flex;justify-content:space-around;flex-wrap:wrap}
 img#cam{width:100%;border-radius:6px;background:#000}
 canvas#map{width:100%;height:260px;background:#000;border-radius:6px}
+canvas#bev{width:100%;height:340px;background:#000;border-radius:6px}
 .kv{display:grid;grid-template-columns:auto auto auto auto;gap:2px 14px;font-size:.95em}
 .kv b{color:#8af}
 label{display:block;margin:4px 0}
@@ -251,6 +257,10 @@ small{color:#888}
  </div>
 
  <div class="card">
+  <b>Local occupancy (body frame, this camera frame — not a map)</b>
+  <canvas id="bev" width="280" height="400"></canvas>
+  <small>x forward = up; y left = left. Green=floor, orange=runway block, red=YOLO, cyan=DWA path.</small>
+  <div style="height:10px"></div>
   <b>Breadcrumb map (dead-reckoning, BEST-EFFORT — not SLAM)</b>
   <canvas id="map" width="600" height="260"></canvas>
  </div>
@@ -310,8 +320,9 @@ function render(){
     '<span>battery</span><b>'+tele.batt_mv+' mV</b>'+
     '<span>crumbs</span><b>'+tele.crumbs+'</b><span>telem age</span><b>'+
     (tele.link&&tele.link.age_s!=null?tele.link.age_s+'s':'-')+'</b>'+
-    '<span>auto</span><b>'+(tele.auto?tele.auto.state+' &rarr;col'+tele.auto.target:'-')+'</b>'+
+    '<span>auto</span><b>'+(tele.auto?tele.auto.state+' clr '+(tele.auto.clearance!=null?tele.auto.clearance+'m':'-'):'-')+'</b>'+
     '<span>accel var</span><b>'+(tele.auto&&tele.auto.accel_var!=null?tele.auto.accel_var:'-')+'</b>';
+  drawBev();
 }
 // ---- joysticks ----
 function joy(el,knob,cb){
@@ -426,5 +437,41 @@ function drawMap(){
   }).catch(function(){});
 }
 setInterval(drawMap,2000);drawMap();
+function drawBev(){
+  var o=tele.occ,c=document.getElementById('bev');if(!c)return;
+  var ctx=c.getContext('2d');
+  ctx.fillStyle='#111';ctx.fillRect(0,0,c.width,c.height);
+  if(!o||!o.cells||!o.cols||!o.rows){
+    ctx.fillStyle='#666';ctx.fillText('waiting for occupancy',12,24);return;}
+  var cols=o.cols|0,rows=o.rows|0,res=o.res||0.12;
+  var ox=o.origin_x||0,oy=o.origin_y||0;
+  var W=cols*res,H=rows*res,pad=18;
+  var sc=Math.min((c.width-2*pad)/W,(c.height-2*pad)/H);
+  function px(x,y){return [c.width/2 - y*sc, c.height-pad - (x-ox)*sc];}
+  var cell=Math.max(1,res*sc);
+  for(var r=0;r<rows;r++){
+    for(var col=0;col<cols;col++){
+      var q=o.cells[r*cols+col]|0;
+      var x=ox+(r+0.5)*res,y=oy+(col+0.5)*res,p=px(x,y);
+      ctx.fillStyle=q===1?'#1b3d1b':q===2?'#8a5a12':q===3?'#8b1b1b':'#2a2a2c';
+      ctx.fillRect(p[0]-cell/2,p[1]-cell/2,cell+0.5,cell+0.5);
+    }
+  }
+  var o0=px(0,0),n=px(0.28,0);
+  ctx.fillStyle='#0a84ff';ctx.beginPath();ctx.arc(o0[0],o0[1],5,0,7);ctx.fill();
+  ctx.strokeStyle='#8af';ctx.beginPath();ctx.moveTo(o0[0],o0[1]);ctx.lineTo(n[0],n[1]);ctx.stroke();
+  var tr=o.traj||[];
+  if(tr.length){
+    ctx.strokeStyle='#5ee';ctx.lineWidth=2;ctx.beginPath();
+    tr.forEach(function(p,i){var q=px(p[0],p[1]);i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1]);});
+    ctx.stroke();ctx.lineWidth=1;
+  }
+  (o.tracks||[]).forEach(function(t){
+    if(t.gx==null||t.gy==null)return;
+    var q=px(t.gx,t.gy);
+    ctx.fillStyle=t.cls==='person'?'#f80':'#f55';
+    ctx.beginPath();ctx.arc(q[0],q[1],4,0,7);ctx.fill();
+  });
+}
 </script></body></html>
 """

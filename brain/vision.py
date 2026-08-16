@@ -18,7 +18,9 @@ Outputs for the AUTO cruiser:
 - st.col_open: 9 columns, each normalized 0..1 (1 = floor edge visible close
   to the car = open; 0 = no near floor edge = blocked).
 - st.boxes: class-filtered detections (collision + annotation, as before).
-- st.boxes_all: ALL detections above conf, class filter ignored (cost map).
+- st.boxes_all: ALL detections above conf, class filter ignored (occupancy).
+- st.tracks_live / st.tracks_pub: SORT tracks in this camera frame.
+- st.occ_grid / st.occ_pub: body-frame occupancy for this camera frame only.
 - st.frame_w/frame_h, st.vision_time (staleness guard).
 """
 import contextlib
@@ -27,6 +29,9 @@ import time
 
 import cv2
 import numpy as np
+
+import occupancy as occmod
+from tracker import SortTracker
 
 cv2.setNumThreads(2)  # undervoltage mitigation: cap CPU load
 
@@ -142,6 +147,8 @@ class Vision(threading.Thread):
         # fallback; once on CPU, still probe every 120s to upgrade back.
         self._hailo_attempts = 0
         self._next_hailo_try = 0.0
+        self.tracker = SortTracker()
+        self._track_t = 0.0
 
     # ---------- backend init ----------
     def _init_hailo(self):
@@ -243,6 +250,7 @@ class Vision(threading.Thread):
             st.boxes_all = all_boxes
             st.det_count = len(boxes)
             self._collision(frame, boxes)
+            self._update_local(frame, all_boxes)
             self._log_dets(boxes)
             if not ran_inference:
                 time.sleep(0.1)  # heuristic-only: ~10Hz
@@ -343,6 +351,7 @@ class Vision(threading.Thread):
                     r += 1
             runway.append(round(max(0, r - gap) / (h * 0.55), 3))
         st.col_open = runway
+        st.floor_mask = mask
         cmin = min(runway[3:6])
         st.wall_like = bool(cmin < float(st.config.get("runway_block", 0.18)))
         st.range_proxy = cmin
@@ -365,13 +374,41 @@ class Vision(threading.Thread):
                 break
         st.collision = bool(yolo_close or st.wall_like)
 
+    # ---------- body-frame occupancy (this camera frame only) ----------
+    def _update_local(self, frame, all_boxes):
+        st = self.state
+        try:
+            now = time.monotonic()
+            dt = 0.05 if self._track_t <= 0.0 else max(0.01, now - self._track_t)
+            self._track_t = now
+            self.tracker.update(all_boxes, dt)
+            live = [tr for tr in self.tracker.tracks if tr.missed == 0]
+            h, w = frame.shape[:2]
+            grid = occmod.build_local(
+                st.config, w, h, st.col_open, live, getattr(st, 'floor_mask', None))
+            st.occ_grid = grid
+            st.occ_pub = dict(grid.meta(), cells=grid.quantize())
+            st.tracks_live = live
+            st.tracks_pub = [tr.to_dict() for tr in live]
+        except Exception as e:
+            st.log(f'vision: occupancy error {e}')
+
     # ---------- annotation for MJPEG stream ----------
     def annotate(self, frame):
         st = self.state
-        for (x1, y1, x2, y2, cls, c) in list(st.boxes):
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, f'{cls} {c:.2f}', (x1, max(12, y1 - 5)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        tracks = list(getattr(st, 'tracks_live', None) or [])
+        if tracks:
+            for tr in tracks:
+                x1, y1, x2, y2 = int(tr.x1), int(tr.y1), int(tr.x2), int(tr.y2)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                tag = f'#{tr.tid} {tr.cls} {tr.conf:.2f}'
+                cv2.putText(frame, tag, (x1, max(12, y1 - 5)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        else:
+            for (x1, y1, x2, y2, cls, c) in list(st.boxes):
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, f'{cls} {c:.2f}', (x1, max(12, y1 - 5)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         if st.collision:
             cv2.rectangle(frame, (0, 0), (frame.shape[1], 32), (0, 0, 255), -1)
             cv2.putText(frame, 'COLLISION', (10, 24),
