@@ -20,9 +20,11 @@ class Camera(threading.Thread):
         if not cap.isOpened():
             cap.release()
             return None
+        cw = int(self.state.config.get('cam_width', 1920))
+        ch = int(self.state.config.get('cam_height', 1080))
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, cw)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, ch)
         cap.set(cv2.CAP_PROP_FPS, 30)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
         w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)

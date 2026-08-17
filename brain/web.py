@@ -49,13 +49,14 @@ async def stream(request):
         return resp
     cam = request.app['camera']
     vis = request.app['vision']
+    _st = request.app['state']
     try:
         while True:
             frame = cam.get_frame()
             if frame is not None:
                 frame = vis.annotate(frame)
                 ok, jpg = cv2.imencode('.jpg', frame,
-                                       [cv2.IMWRITE_JPEG_QUALITY, 70])
+                                       [cv2.IMWRITE_JPEG_QUALITY, int(_st.config.get('stream_jpeg_quality', 85))])
                 if ok:
                     b = jpg.tobytes()
                     await resp.write(
