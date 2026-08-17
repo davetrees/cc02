@@ -77,6 +77,8 @@ class State:
         self.frame_w = 640
         self.frame_h = 480
         self.vision_time = 0.0     # monotonic time of last heuristic update
+        self.floor_relearn = False # set True (debug port / panel) to re-sample
+                                   # the floor colour model from the strip ahead
         # AUTO cruiser observability (published by autopilot every tick)
         self.auto_costs = [1.0] * 9
         self.auto_target = 4

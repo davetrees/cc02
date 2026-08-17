@@ -310,6 +310,17 @@ class Vision(threading.Thread):
         hist = cv2.calcHist([hsv[int(h*0.85):, int(w*0.2):int(w*0.8)]],
                             [0, 1], None, [30, 32], [0, 180, 0, 256])
         cv2.normalize(hist, hist, 0, 255, cv2.NORM_MINMAX)
+        # Human-triggered floor RE-LEARN. Breaks the non-grass chicken-and-egg:
+        # on dirt/concrete the lawn-tuned HSV model matches nothing -> every
+        # column reads blocked -> st.collision=True -> the EMA below stays
+        # frozen -> it can never learn a surface it STARTS blocked on. Point the
+        # car at clear ground and set st.floor_relearn (debug port or panel) to
+        # re-bootstrap the model from the strip in front. Safe by design: only
+        # re-samples on explicit request, never auto-learns a wall. (2026-08-17)
+        if getattr(st, 'floor_relearn', False):
+            st.floor_relearn = False
+            self._floor_hist = None
+            st.log('vision: floor RE-LEARN -> re-sampling ground from front strip')
         if self._floor_hist is None:
             self._floor_hist = hist
         elif not st.collision:

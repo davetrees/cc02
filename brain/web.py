@@ -109,6 +109,11 @@ async def ws_handler(request):
                 # LEVEL/ZERO: serial_link raises DISP DF_CAL_REQUEST for ~1s
                 st.cal_request_time = time.monotonic()
                 st.log('web: LEVEL/ZERO requested (AH re-zero)')
+            if d.get('floor_relearn'):
+                # re-sample the floor colour model from the strip ahead — use on
+                # a new surface (dirt/concrete) the lawn model reads as blocked
+                st.floor_relearn = True
+                st.log('web: floor RE-LEARN requested')
             if 'config' in d and isinstance(d['config'], dict):
                 st.config.update(d['config'])
                 st.save_config()
@@ -202,6 +207,7 @@ small{color:#888}
    <button id="bAUTO" onclick="setMode('AUTO')">AUTO</button>
    <button id="bRTH" onclick="setMode('RTH')" title="best-effort dead reckoning">RTH*</button>
    <button onclick="send({cal:true})" title="re-zero the artificial horizon (car level and still)">LEVEL/ZERO</button>
+   <button onclick="send({floor_relearn:true})" title="re-sample the drivable-ground colour model from the strip ahead — use on dirt/concrete the lawn model reads as blocked">RELEARN FLOOR</button>
   </div>
   <div class="warn" style="text-align:center">RTH is BEST-EFFORT breadcrumb replay (dead reckoning, not SLAM)</div>
   <button id="estopBtn" onclick="toggleEstop()">ESTOP</button>
