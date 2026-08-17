@@ -219,6 +219,7 @@ small{color:#888}
 
  <div class="card">
   <img id="cam" src="/stream.mjpg" alt="camera">
+  <div><a href="/stream.mjpg" target="_blank" rel="noopener">Open full-res stream &#8599;</a></div>
   <div class="kv" id="telem"></div>
   <div><span id="wsStat" class="badge">ws: connecting</span>
    <span id="linkStat" class="badge">serial: ?</span>
