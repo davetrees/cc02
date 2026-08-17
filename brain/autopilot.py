@@ -106,7 +106,11 @@ class Autopilot(threading.Thread):
 
         cap_us = 500.0 * float(st.config.get('max_speed', 0.30))
         user_steer_us = 1500 + int(max(-500, min(500, st.user_steer * 500)))
-        thr_dev = max(-cap_us, min(cap_us, st.user_throttle * 500.0))
+        # internal convention: throttle_us > 1500 = FORWARD. This car's
+        # input maps forward to negative user_throttle, so negate it once
+        # here; the single inversion in cmd_tuple maps it to the ESC. Manual
+        # PWM output is unchanged; autonomy direction logic is now correct.
+        thr_dev = max(-cap_us, min(cap_us, -st.user_throttle * 500.0))
         user_throttle_us = 1500 + int(thr_dev)
 
         mode = st.mode

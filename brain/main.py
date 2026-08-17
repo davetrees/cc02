@@ -136,11 +136,6 @@ class State:
             steer = 3000 - steer
         if self.config.get("invert_throttle", True):
             thr = 3000 - thr
-        # servo/ESC direction inversion (config; default inverted per install)
-        if self.config.get("invert_steer", True):
-            steer = 3000 - steer
-        if self.config.get("invert_throttle", True):
-            thr = 3000 - thr
         return (steer, thr, mode, flags,
                 self.config.get('tip_roll_deg', 45),
                 self.config.get('tip_pitch_deg', 45))
