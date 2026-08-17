@@ -377,10 +377,16 @@ class Vision(threading.Thread):
     # ---------- annotation for MJPEG stream ----------
     def annotate(self, frame):
         st = self.state
-        for (x1, y1, x2, y2, cls, c) in list(st.boxes):
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        # Draw EVERY detected object (identification is decoupled from the
+        # collision class filter). Collision-armed classes (in yolo_classes)
+        # are flagged orange; info-only detections green.
+        allowed = set(st.config.get('yolo_classes', []))
+        for (x1, y1, x2, y2, cls, c) in list(st.boxes_all):
+            armed = (not allowed) or (cls in allowed)
+            color = (0, 165, 255) if armed else (0, 255, 0)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3 if armed else 2)
             cv2.putText(frame, f'{cls} {c:.2f}', (x1, max(12, y1 - 5)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         fw = frame.shape[1]; fh = frame.shape[0]
         _cf = float(st.config.get('path_center_frac', 0.34))
         _tf = float(st.config.get('path_top_frac', 0.35))
