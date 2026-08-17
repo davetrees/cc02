@@ -292,11 +292,13 @@ static void control_task(void *arg)
         /* ---- ANTI-ROLL COUNTER-STEER (continuous closed loop) ----
          * Runs every tick on the ESP, on TOP of whatever steer was chosen
          * (manual / auto / debug / failsafe). When the car starts to tip, it
-         * steers into the fall to drive back under the CG. Roll rate is the
-         * fast term (catches a dynamic flick), roll angle the slow term
-         * (holds correction while leaned). Steering only — never throttle —
-         * so ESTOP's neutral throttle is untouched. Not defeatable from the
-         * Pi: this is the layer that must save it when the Pi is wrong. */
+         * steers AWAY from the low/falling side so existing yaw/inertia
+         * carries the chassis out of the tilt (mass back over the wheels).
+         * Roll rate is the fast term (catches a dynamic flick), roll angle
+         * the slow term (holds correction while leaned). Steering only —
+         * never throttle — so ESTOP's neutral throttle is untouched. Not
+         * defeatable from the Pi: this is the layer that must save it when
+         * the Pi is wrong. */
         static float roll_f = 0.0f, rollrate_f = 0.0f, prev_roll = 0.0f;
         if (imu_ok) {
             float rr = (roll - prev_roll) / 0.01f;      /* rad/s */

@@ -16,6 +16,8 @@
  "anti_tip_enable": false,
  "tip_roll_deg": 45,
  "tip_pitch_deg": 45,
+ "counter_steer_enable": false,
+ "counter_steer_dir": -1,
  "invert_steer": false,
  "invert_throttle": true
 }

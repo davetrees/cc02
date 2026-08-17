@@ -26,11 +26,11 @@
 #define ARS_KP_RATE    3.0f    /* µs of steer per deg/s of roll rate past deadband */
 #define ARS_MAX_US     500.0f  /* clamp: full steer lock in a real tip */
 #define ARS_ENGAGE_MAX 60.0f   /* deg: above this = flopped or un-zeroed, stand down */
-/* ARS_DIR sign: bias is built to steer TOWARD the low/falling side (drive the
- * contact patch back under the CG = unwind the turn that's tipping it). +1 is
- * correct per rollover physics AND field observation 2026-08-16: with -1 the
- * car steered further INTO the turn and rolled. Do NOT flip to -1 again. */
-#define ARS_DIR        (+1)
+/* ARS_DIR: bias has the same sign as lean (roll_deg / roll rate).
+ * steer += ARS_DIR * bias. -1 = steer AWAY from the low/falling side so
+ * yaw/inertia carries mass back over the wheels (inertia out of tilt).
+ * +1 would steer toward the fall (drive the contact patch under the CG). */
+#define ARS_DIR        (-1)
 
 /* ESTOP active brake: neutral only coasts, so drive the ESC to the opposite
  * side of neutral briefly to actually arrest motion, then settle to neutral. */

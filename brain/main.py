@@ -41,8 +41,10 @@ DEFAULT_CONFIG = {
     'web_invert_throttle': True,
     # Pi-paired gamepad steer inversion (gamepad.py)
     'gp_invert_steer': True,
-    # anti-tip counter-steer gate (autopilot.py; needs a zeroed AH to be safe)
+    # anti-tip counter-steer (autopilot.py; default OFF; needs a zeroed AH)
+    # dir -1 = same polarity as firmware ARS_DIR -1 (inertia out of tilt)
     'counter_steer_enable': False,
+    'counter_steer_dir': -1,
 }
 
 
