@@ -36,6 +36,7 @@
  "web_invert_throttle": true,
  "gp_invert_steer": true,
  "counter_steer_enable": false,
+ "counter_steer_dir": -1,
  "invert_steer": false,
  "invert_throttle": true,
  "counter_steer_deg": 200

@@ -159,8 +159,11 @@ class Autopilot(threading.Thread):
         else:
             steer_us, throttle_us = 1500, 1500
 
-        # anti-tip counter-steer: past 30 deg of roll, steer opposite,
-        # proportional; direction/gain in config so the sign is field-tunable
+        # Pi second-layer anti-tip (default OFF). Past counter_steer_deg of
+        # roll, add a proportional steer offset. counter_steer_dir -1 matches
+        # firmware ARS_DIR -1: bias is |lean| past the gate, then
+        # steer += dir * sign(roll) * bias, which yaws AWAY from the falling
+        # side (inertia out of tilt). +1 would fight the ESP.
         t2 = st.telem
         cs_on = bool(st.config.get("counter_steer_enable", False))
         if cs_on and t2 and not st.estop and throttle_us > 1520:
